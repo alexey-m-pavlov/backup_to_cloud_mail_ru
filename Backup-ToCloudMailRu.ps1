@@ -18,7 +18,8 @@
       - PowerShell 7+
       - rclone, настроенный remote для Cloud@mail.ru (тип mailru или webdav)
       - Конфигурация rclone зашифрована паролем
-      - Модуль CredentialManager (Install-Module CredentialManager -Scope CurrentUser)
+      - Модуль TUN.CredentialManager
+        (Install-Module TUN.CredentialManager -Scope CurrentUser)
       - Пароль конфигурации rclone сохранён в Credential Manager
         под именем, указанным в поле CredentialTarget
 
@@ -55,17 +56,19 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # ============================================================
-# 0. Логирование через StreamWriter
+# 0. Логирование
 # ============================================================
 $script:LogWriter        = $null
 $script:LogWriteCount    = 0
 $script:LogFlushInterval = 50
 
-# Раздельный лог неудачных файлов
+# Состояние раздельного лога неудачных файлов
 $script:FailedLogWriter  = $null
 $script:FailedLogPath    = $null
 $script:FailedFileCount  = 0
 
+# Пишет строку в консоль и в основной лог.
+# Сбрасывает буфер на диск для WARNING/ERROR сразу, для INFO — периодически.
 function Write-Log {
     param(
         [Parameter(Mandatory)][string]$Message,
@@ -91,6 +94,7 @@ function Write-Log {
     }
 }
 
+# Открывает основной лог: append, UTF-8 без BOM, буферизация вручную.
 function Open-LogWriter {
     param([Parameter(Mandatory)][string]$Path)
     $script:LogWriter = [System.IO.StreamWriter]::new(
@@ -102,6 +106,7 @@ function Open-LogWriter {
     $script:LogWriteCount = 0
 }
 
+# Сбрасывает буфер и закрывает основной лог.
 function Close-LogWriter {
     if ($null -ne $script:LogWriter) {
         try {
@@ -113,9 +118,7 @@ function Close-LogWriter {
     }
 }
 
-# Открывает раздельный лог неудачных файлов.
-# AutoFlush = $true: записи сразу на диск — неудач обычно мало,
-# а потерять их при аварии не хотелось бы.
+# Открывает раздельный лог неудачных файлов: append, UTF-8 без BOM, AutoFlush.
 function Open-FailedLogWriter {
     param([Parameter(Mandatory)][string]$Path)
     $script:FailedLogWriter = [System.IO.StreamWriter]::new(
@@ -127,6 +130,7 @@ function Open-FailedLogWriter {
     $script:FailedLogPath = $Path
 }
 
+# Закрывает раздельный лог неудачных файлов.
 function Close-FailedLogWriter {
     if ($null -ne $script:FailedLogWriter) {
         try {
@@ -155,8 +159,10 @@ function Write-FailedFile {
 }
 
 # ============================================================
-# 1. Блокировка параллельных запусков (lock-файл)
+# 1. Блокировка параллельных запусков
 # ============================================================
+# Файл-маркер с эксклюзивным доступом. ОС удаляет его при завершении
+# процесса (включая аварийное). Если файл занят — скрипт уже запущен.
 $lockFilePath = Join-Path $PSScriptRoot "rclone-backup.lock"
 $lockStream   = $null
 
@@ -190,6 +196,7 @@ try {
         exit 1
     }
 
+    # Читаем JSON и превращаем в объект
     try {
         $rawConfig = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8
         $config = $rawConfig | ConvertFrom-Json -Depth 20
@@ -198,6 +205,7 @@ try {
         exit 1
     }
 
+    # Проверяем наличие обязательных разделов и хотя бы одной папки
     foreach ($required in 'RclonePath','RemoteName','Folders','Retry','Logging','CredentialTarget') {
         if (-not $config.PSObject.Properties.Name.Contains($required)) {
             Write-Host "В конфигурации отсутствует обязательный раздел: $required" -ForegroundColor Red
@@ -209,14 +217,14 @@ try {
         exit 1
     }
 
+    # Путь к rclone.exe
     $rclonePath = [string]$config.RclonePath
     if (-not (Test-Path -LiteralPath $rclonePath)) {
         Write-Host "rclone.exe не найден по пути: $rclonePath" -ForegroundColor Red
         exit 1
     }
 
-    # Путь к конфигу rclone. Относительный путь разрешаем от папки скрипта,
-    # чтобы не зависеть от рабочей папки процесса при запуске из Планировщика.
+    # Путь к rclone.conf; относительный разрешаем от папки скрипта
     $rcloneConfigPath = [string]$config.RcloneConfigPath
     if (-not [string]::IsNullOrWhiteSpace($rcloneConfigPath) -and
         -not [System.IO.Path]::IsPathRooted($rcloneConfigPath)) {
@@ -226,17 +234,20 @@ try {
     $remoteName       = [string]$config.RemoteName
     $credentialTarget = [string]$config.CredentialTarget
 
+    # Режим передачи: copy или sync
     $transferMode = if ($config.PSObject.Properties.Name.Contains('TransferMode')) { [string]$config.TransferMode } else { 'copy' }
     if ($transferMode -notin @('copy','sync')) {
         Write-Host "Недопустимое значение TransferMode: '$transferMode'. Допустимо: copy, sync." -ForegroundColor Red
         exit 1
     }
 
+    # Дополнительные флаги rclone из конфига
     $extraFlags = @()
     if ($config.PSObject.Properties.Name.Contains('ExtraFlags') -and $config.ExtraFlags) {
         $extraFlags = @($config.ExtraFlags)
     }
 
+    # Лимит размера файла (по умолчанию 2 ГБ)
     $maxFileSizeBytes = 2147483648
     if ($config.PSObject.Properties.Name.Contains('MaxFileSizeBytes') -and [int]$config.MaxFileSizeBytes -gt 0) {
         $maxFileSizeBytes = [int]$config.MaxFileSizeBytes
@@ -251,6 +262,7 @@ try {
         $logDir = Join-Path $PSScriptRoot $logDir
     }
 
+    # Создаём папку логов, если её нет
     if (-not (Test-Path -LiteralPath $logDir)) {
         try {
             New-Item -ItemType Directory -Path $logDir -Force | Out-Null
@@ -260,6 +272,7 @@ try {
         }
     }
 
+    # Имена логов на текущие сутки
     $logFilePath       = Join-Path $logDir ("backup_{0}.log" -f (Get-Date -Format 'yyyyMMdd'))
     $failedLogFilePath = Join-Path $logDir ("failed_{0}.log" -f (Get-Date -Format 'yyyyMMdd'))
 
@@ -271,6 +284,7 @@ try {
         exit 1
     }
 
+    # Срок хранения логов: параметр скрипта или значение из конфига
     $retention = $LogRetentionDays
     if ($config.Logging.PSObject.Properties.Name.Contains('RetentionDays')) {
         $cfgRetention = $config.Logging.RetentionDays
@@ -279,7 +293,7 @@ try {
         }
     }
 
-    # Ротация: удаляем старые backup_*.log и failed_*.log
+    # Удаляем старые логи обоих типов
     if ($retention -gt 0) {
         try {
             $threshold = (Get-Date).Date.AddDays(-$retention)
@@ -292,9 +306,11 @@ try {
         }
     }
 
+    # Шапка запуска
     Write-Log "=== Запуск резервного копирования (rclone) ==="
     Write-Log "Конфигурация: $ConfigPath"
     Write-Log "rclone: $rclonePath"
+    Write-Log "rclone.conf: $rcloneConfigPath"
     Write-Log "Remote: $remoteName"
     Write-Log "Режим: $transferMode"
     Write-Log "WhatIf: $($WhatIfPreference)"
@@ -306,13 +322,15 @@ try {
     # --------------------------------------------------------
     # 4. Пароль конфигурации rclone из Credential Manager
     # --------------------------------------------------------
-    if (-not (Get-Module -ListAvailable -Name CredentialManager)) {
-        Write-Log "Модуль CredentialManager не найден. Установите: Install-Module CredentialManager -Scope CurrentUser" -Level ERROR
+    if (-not (Get-Module -ListAvailable -Name TUN.CredentialManager)) {
+        Write-Log "Модуль TUN.CredentialManager не найден. Установите: Install-Module TUN.CredentialManager -Scope CurrentUser" -Level ERROR
         exit 1
     }
-    Import-Module CredentialManager -ErrorAction Stop
+    Import-Module TUN.CredentialManager -ErrorAction Stop
 
     try {
+        # Забираем пароль конфигурации и кладём его в переменную окружения —
+        # её унаследует процесс rclone
         $cred = Get-StoredCredential -Target $credentialTarget
         if (-not $cred) {
             throw "Учётные данные с именем '$credentialTarget' не найдены в Windows Credential Manager."
@@ -333,14 +351,18 @@ try {
     if ($baseDelay -lt 1) { $baseDelay = 1 }
 
     # --------------------------------------------------------
-    # 6. Вспомогательная функция вызова rclone
+    # 6. Вызов rclone
     # --------------------------------------------------------
+    # Запускает rclone с общими аргументами, собирает stdout+stderr,
+    # пишет вывод в основной лог, парсит ошибки в failed-лог.
+    # Поддерживает -WhatIf через ShouldProcess.
     function Invoke-Rclone {
         param(
             [Parameter(Mandatory)][string[]]$Arguments,
             [Parameter(Mandatory)][string]$FolderDisplay
         )
 
+        # Базовые аргументы: путь к конфигу и формат лога rclone
         $baseArgs = @()
         if (-not [string]::IsNullOrWhiteSpace($rcloneConfigPath)) {
             $baseArgs += @('--config', $rcloneConfigPath)
@@ -350,6 +372,7 @@ try {
         $allArgs = $baseArgs + $Arguments
         $cmdLine = "rclone " + ($allArgs -join ' ')
 
+        # Режим -WhatIf: не запускаем, только логируем команду
         if (-not $PSCmdlet.ShouldProcess($cmdLine, 'Выполнить rclone')) {
             Write-Log "  [WhatIf] $cmdLine"
             return 0
@@ -358,6 +381,7 @@ try {
         Write-Log $cmdLine
 
         try {
+            # Запуск и захват вывода
             $output = & $rclonePath @allArgs 2>&1
             $exitCode = $LASTEXITCODE
 
@@ -376,8 +400,7 @@ try {
                 }
             }
 
-            # rclone упал с ненулевым кодом, но конкретных файлов в выводе нет.
-            # Записываем общую ошибку, чтобы факт сбоя не потерялся.
+            # Ненулевой код без конкретных ошибок в выводе — общая запись
             if ($exitCode -ne 0 -and $foundErrors -eq 0) {
                 Write-FailedFile -FolderDisplay $FolderDisplay -File '<общая ошибка>' `
                     -Message "rclone завершился с кодом $exitCode"
@@ -395,7 +418,7 @@ try {
     }
 
     # --------------------------------------------------------
-    # 7. Основной цикл
+    # 7. Основной цикл по папкам
     # --------------------------------------------------------
     $totalFolders   = @($config.Folders | Where-Object { $_.Enabled -ne $false }).Count
     $processed      = 0
@@ -404,6 +427,7 @@ try {
 
     foreach ($folder in $config.Folders) {
 
+        # Папки с Enabled=false пропускаем
         if ($folder.Enabled -eq $false) {
             Write-Log "Пропущено (Enabled=false): $($folder.LocalPath)"
             continue
@@ -421,6 +445,7 @@ try {
         $folderDisplay = "$localPath -> $remoteName`:$remotePath"
         Write-Log "--- Папка $processed/$totalFolders : $folderDisplay ---"
 
+        # Локальной папки нет — фиксируем и идём дальше
         if (-not (Test-Path -LiteralPath $localPath -PathType Container)) {
             Write-Log "Локальная папка не существует или не является папкой: $localPath" -Level ERROR
             Write-FailedFile -FolderDisplay $folderDisplay -File '<папка>' `
@@ -430,7 +455,7 @@ try {
             continue
         }
 
-        # --- Предварительная проверка файлов, превышающих лимит облака ---
+        # Проверка файлов, превышающих лимит облака
         try {
             $oversized = Get-ChildItem -LiteralPath $localPath -Recurse -File -ErrorAction SilentlyContinue |
                 Where-Object { $_.Length -gt $maxFileSizeBytes }
@@ -446,9 +471,10 @@ try {
             Write-Log "Ошибка при сканировании размеров файлов: $_" -Level WARNING
         }
 
-        # --- Формируем аргументы rclone ---
+        # Аргументы rclone: режим, локальная папка, remote:путь
         $rcloneArgs = @($transferMode, $localPath, "${remoteName}:$remotePath")
 
+        # Исключения
         if (-not [string]::IsNullOrWhiteSpace($excludeMask)) {
             foreach ($mask in ($excludeMask -split ';')) {
                 $trimmed = $mask.Trim()
@@ -456,11 +482,12 @@ try {
             }
         }
 
+        # Дополнительные флаги из конфига
         if ($extraFlags.Count -gt 0) {
             $rcloneArgs += $extraFlags
         }
 
-        # --- Цикл повторных попыток для текущей папки ---
+        # Повторные попытки для текущей папки с экспоненциальной задержкой
         $attempt = 0
         $folderSuccess = $false
 
@@ -483,6 +510,7 @@ try {
             }
         }
 
+        # Папка не синхронизирована после всех попыток
         if (-not $folderSuccess) {
             Write-Log "Папка не синхронизирована после $maxRetries попыток: $localPath" -Level ERROR
             $failed += $localPath
@@ -492,6 +520,7 @@ try {
     # --------------------------------------------------------
     # 8. Итог
     # --------------------------------------------------------
+    # Сообщаем про failed-лог, если туда что-то попало
     $failedLogHasData = $false
     if ($script:FailedLogPath -and (Test-Path -LiteralPath $script:FailedLogPath)) {
         try {
@@ -507,6 +536,7 @@ try {
         Write-Log "Раздельный лог неудачных файлов: $script:FailedLogPath"
     }
 
+    # Определяем код выхода
     if ($failed.Count -gt 0) {
         Write-Log ("Резервное копирование завершено с ошибками. Не синхронизировано папок: {0}:`n  - {1}" -f `
             $failed.Count, ($failed -join "`n  - ")) -Level ERROR
@@ -525,6 +555,7 @@ try {
     # ============================================================
     # 9. Очистка
     # ============================================================
+    # Стираем пароль из переменной окружения, закрываем логи, освобождаем lock
     $env:RCLONE_CONFIG_PASS = $null
     Close-LogWriter
     Close-FailedLogWriter
