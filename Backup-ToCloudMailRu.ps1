@@ -248,10 +248,11 @@ try {
         $extraFlags = @($config.ExtraFlags)
     }
 
-    # Лимит размера файла (по умолчанию 2 ГБ)
-    $maxFileSizeBytes = 2147483648
-    if ($config.PSObject.Properties.Name.Contains('MaxFileSizeBytes') -and [int]$config.MaxFileSizeBytes -gt 0) {
-        $maxFileSizeBytes = [int]$config.MaxFileSizeBytes
+    # Лимит размера файла (по умолчанию 2 ГБ). Int64, потому что 2 ГБ
+    # не помещается в Int32 (максимум 2147483647).
+    [int64]$maxFileSizeBytes = 2147483648
+    if ($config.PSObject.Properties.Name.Contains('MaxFileSizeBytes') -and [int64]$config.MaxFileSizeBytes -gt 0) {
+        $maxFileSizeBytes = [int64]$config.MaxFileSizeBytes
     }
 
     # --------------------------------------------------------
