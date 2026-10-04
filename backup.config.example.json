@@ -1,0 +1,28 @@
+{
+  "RclonePath": "C:\\Tools\\rclone\\rclone.exe",
+  "RcloneConfigPath": "",
+  "RemoteName": "mailru",
+  "TransferMode": "copy",
+  "ExtraFlags": ["--checksum", "--transfers", "4"],
+  "MaxFileSizeBytes": 2147483648,
+  "CredentialTarget": "rclone-config-pass",
+
+  "Retry": {
+    "MaxRetries": 3,
+    "BaseDelaySeconds": 2
+  },
+
+  "Logging": {
+    "Directory": "logs",
+    "RetentionDays": 30
+  },
+
+  "Folders": [
+    {
+      "Enabled": true,
+      "LocalPath": "D:\\Path\\To\\Folder",
+      "RemotePath": "/Backup/FolderName",
+      "ExcludeMask": "*.tmp; *.bak; ~*"
+    }
+  ]
+}
