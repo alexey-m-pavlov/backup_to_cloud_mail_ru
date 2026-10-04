@@ -1,6 +1,6 @@
 {
   "RclonePath": "C:\\Tools\\rclone\\rclone.exe",
-  "RcloneConfigPath": "",
+  "RcloneConfigPath": "secrets\\rclone.conf",
   "RemoteName": "mailru",
   "TransferMode": "copy",
   "ExtraFlags": ["--checksum", "--transfers", "4"],

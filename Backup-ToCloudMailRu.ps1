@@ -215,7 +215,14 @@ try {
         exit 1
     }
 
+    # Путь к конфигу rclone. Относительный путь разрешаем от папки скрипта,
+    # чтобы не зависеть от рабочей папки процесса при запуске из Планировщика.
     $rcloneConfigPath = [string]$config.RcloneConfigPath
+    if (-not [string]::IsNullOrWhiteSpace($rcloneConfigPath) -and
+        -not [System.IO.Path]::IsPathRooted($rcloneConfigPath)) {
+        $rcloneConfigPath = Join-Path $PSScriptRoot $rcloneConfigPath
+    }
+
     $remoteName       = [string]$config.RemoteName
     $credentialTarget = [string]$config.CredentialTarget
 

@@ -16,6 +16,7 @@
 - [Коды выхода](#коды-выхода)
 - [Логи](#логи)
 - [Безопасность](#безопасность)
+- [Перенос между машинами](#перенос-между-машинами)
 - [Известные ограничения](#известные-ограничения)
 
 ## Возможности
@@ -33,11 +34,24 @@
 
 ## Состав проекта
 
+```
+Backup-ToCloudMailRu/
+├── .gitignore
+├── Backup-ToCloudMailRu.ps1
+├── backup.config.json              локальный, в git не попадает
+├── backup.config.example.json      шаблон
+├── README.md
+├── secrets/
+│   └── rclone.conf                 зашифрованный конфиг rclone
+└── logs/                           создаётся автоматически
+```
+
 | Файл | Назначение |
 |---|---|
 | `Backup-ToCloudMailRu.ps1` | Основной скрипт резервного копирования |
 | `backup.config.json` | Конфигурация: пути, remote, папки, логирование |
 | `backup.config.example.json` | Шаблон конфигурации для новых машин |
+| `secrets/rclone.conf` | Зашифрованный конфиг rclone (не коммитится) |
 | `README.md` | Этот файл |
 | `logs/` | Папка логов (создаётся автоматически) |
 
@@ -54,17 +68,40 @@
 
 ## Разовая настройка
 
-### 1. Настройка rclone для Cloud@mail.ru
+### 1. Создание структуры папок
+
+```
+Backup-ToCloudMailRu/
+├── secrets/
+└── logs/
+```
+
+Папки создаются автоматически при первом запуске скрипта, но `secrets/`
+удобнее создать заранее — туда вы положите `rclone.conf`.
+
+### 2. Настройка rclone для Cloud@mail.ru
 
 Создайте пароль для внешних приложений в настройках безопасности Mail.ru.
 Выберите уровень доступа **«Полный доступ к Почте, Облаку и Календарю»**
 (all protocols) — вариант «Только Cloud (WebDav)» с rclone не работает.
 
-Затем создайте remote:
+Укажите rclone, где хранить конфиг. Два способа:
 
-```
+**Способ A — через переменную окружения** (действует только в текущей
+сессии PowerShell):
+
+```powershell
+$env:RCLONE_CONFIG = "C:\Scripts\Backup-ToCloudMailRu\secrets\rclone.conf"
 rclone config
 ```
+
+**Способ B — через параметр `--config`** при каждом вызове:
+
+```powershell
+rclone --config "C:\Scripts\Backup-ToCloudMailRu\secrets\rclone.conf" config
+```
+
+В диалоге `rclone config`:
 
 - `n` — новый remote
 - Имя: `mailru`
@@ -73,19 +110,20 @@ rclone config
 
 Проверьте подключение:
 
-```
-rclone lsd mailru:
+```powershell
+rclone --config "C:\Scripts\Backup-ToCloudMailRu\secrets\rclone.conf" lsd mailru:
 ```
 
 Зашифруйте конфигурацию rclone:
 
-```
-rclone config
+```powershell
+rclone --config "C:\Scripts\Backup-ToCloudMailRu\secrets\rclone.conf" config
 ```
 
-Выберите `s` (Set configuration password) и задайте пароль. Запомните его.
+Выберите `s` (Set configuration password) и задайте пароль. Запомните его —
+он понадобится на шаге 3.
 
-### 2. Сохранение пароля конфигурации в Credential Manager
+### 3. Сохранение пароля конфигурации в Credential Manager
 
 От имени того же пользователя, под которым будет работать задача:
 
@@ -98,17 +136,17 @@ New-StoredCredential -Target "rclone-config-pass" -Credential $cred -Persist Loc
 Имя цели (`rclone-config-pass`) должно совпадать с полем `CredentialTarget`
 в `backup.config.json`.
 
-### 3. Проверка связки
+### 4. Проверка связки
 
 ```powershell
 $env:RCLONE_CONFIG_PASS = (Get-StoredCredential -Target "rclone-config-pass").GetNetworkCredential().Password
-rclone lsd mailru:
+rclone --config "C:\Scripts\Backup-ToCloudMailRu\secrets\rclone.conf" lsd mailru:
 $env:RCLONE_CONFIG_PASS = $null
 ```
 
 Если команда вывела список папок — всё настроено.
 
-### 4. Пробный запуск
+### 5. Пробный запуск
 
 ```powershell
 .\Backup-ToCloudMailRu.ps1 -WhatIf
@@ -123,7 +161,7 @@ $env:RCLONE_CONFIG_PASS = $null
 | Поле | Обязательное | Описание |
 |---|---|---|
 | `RclonePath` | Да | Полный путь к `rclone.exe` |
-| `RcloneConfigPath` | Нет | Путь к `rclone.conf`. Пусто — используется путь по умолчанию |
+| `RcloneConfigPath` | Нет | Путь к `rclone.conf`. Относительный — от папки скрипта. Пусто — путь rclone по умолчанию |
 | `RemoteName` | Да | Имя remote из конфига rclone (например, `mailru`) |
 | `TransferMode` | Нет | `copy` (по умолчанию) или `sync` |
 | `ExtraFlags` | Нет | Массив дополнительных флагов rclone |
@@ -160,8 +198,7 @@ $env:RCLONE_CONFIG_PASS = $null
 - **`copy`** — только добавляет новые и изменённые файлы. Удалённые локально
   файлы **остаются** в облаке. Безопасный режим, рекомендуется по умолчанию.
 - **`sync`** — делает удалённую папку точной копией локальной, **удаляя**
-  всё лишнее на удалённой стороне. Используйте с осторожностью: ошибка или
-  повреждение локальной папки приведёт к потере резервной копии.
+  всё лишнее на удалённой стороне. Используйте с осторожностью.
 
 ## Особенность путей в JSON
 
@@ -174,6 +211,7 @@ JSON использует обратный слэш (`\`) как служебн�
 | `D:\ImportantData\Documents` | `"D:\\ImportantData\\Documents"` |
 | `\\server\share\folder` (UNC) | `"\\\\server\\share\\folder"` |
 | `logs` (относительный) | `"logs"` — без изменений |
+| `secrets\rclone.conf` (относительный) | `"secrets\\rclone.conf"` |
 
 Это правило применяется к полям:
 
@@ -185,8 +223,10 @@ JSON использует обратный слэш (`\`) как служебн�
 **Поле `Folders[].RemotePath` — исключение.** Это путь на WebDAV-сервере,
 и rclone требует там **прямые слэши**: `"/Backup/Documents"`.
 
-После чтения конфига `ConvertFrom-Json` автоматически превращает `\\`
-в одиночный `\`, так что скрипт работает с обычными Windows-путями.
+**Относительные пути** в `RcloneConfigPath` и `Logging.Directory`
+разрешаются **от папки скрипта** (`$PSScriptRoot`), а не от рабочей папки
+процесса. Это избавляет от сюрпризов при запуске из Планировщика задач,
+где рабочая папка задаётся отдельно.
 
 ## Запуск из Планировщика задач
 
@@ -201,9 +241,9 @@ JSON использует обратный слэш (`\`) как служебн�
    - Программа: `pwsh.exe`
    - Аргументы:
      ```
-     -NoProfile -ExecutionPolicy Bypass -File "C:\Scripts\Backup-ToCloudMailRu.ps1"
+     -NoProfile -ExecutionPolicy Bypass -File "C:\Scripts\Backup-ToCloudMailRu\Backup-ToCloudMailRu.ps1"
      ```
-   - Рабочая папка: `C:\Scripts` (папка со скриптом)
+   - Рабочая папка: `C:\Scripts\Backup-ToCloudMailRu`
 5. **Параметры**:
    - «Не запускать новую задачу, если предыдущая ещё выполняется» —
      дополнительная страховка поверх lock-файла.
@@ -259,10 +299,31 @@ JSON использует обратный слэш (`\`) как служебн�
   зашифрован DPAPI и привязан к пользователю и машине.
 - Через переменную окружения `RCLONE_CONFIG_PASS` пароль передаётся
   процессу rclone; переменная очищается в `finally`.
-- Пароль remote (Mail.ru) хранится внутри зашифрованного `rclone.conf`.
+- Пароль remote (Mail.ru) хранится внутри `secrets/rclone.conf`, который
+  зашифрован паролем конфигурации rclone.
 - Трафик к Cloud@mail.ru идёт по HTTPS.
 - Lock-файл использует `FileOptions::DeleteOnClose` — ОС удаляет его
   автоматически при завершении процесса, включая аварийное.
+- Папка `secrets/` исключена из git — файл с секретами не попадёт в
+  репозиторий.
+
+## Перенос между машинами
+
+`secrets/rclone.conf` **можно** копировать между машинами — он защищён
+паролем конфигурации, и без него файл бесполезен.
+
+Пароль конфигурации в Credential Manager перенести **нельзя**: он
+зашифрован DPAPI и привязан к пользователю и машине. На новой машине
+нужно заново выполнить шаг 3 разовой настройки:
+
+```powershell
+Import-Module CredentialManager
+$cred = Get-Credential -Message "Пароль конфигурации rclone" -UserName "rclone"
+New-StoredCredential -Target "rclone-config-pass" -Credential $cred -Persist LocalMachine
+```
+
+Используйте **тот же** пароль, что и на исходной машине — иначе
+`rclone.conf` не расшифруется.
 
 ## Известные ограничения
 
