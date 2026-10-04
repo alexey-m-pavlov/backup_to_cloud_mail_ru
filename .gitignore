@@ -1,0 +1,43 @@
+# ============================================================
+# Backup-ToCloudMailRu — исключения для Git
+# ============================================================
+
+# --- Логи и служебные файлы скрипта ---
+logs/
+*.log
+rclone-backup.lock
+
+# --- Локальная конфигурация ---
+# Рабочий конфиг содержит пути и имена ресурсов конкретной машины.
+# В репозиторий попадает только шаблон backup.config.example.json.
+backup.config.json
+
+# --- Секреты и артефакты rclone ---
+rclone.conf
+rclone-credential.xml
+*.sec
+
+# --- Сборки и архивы ---
+*.zip
+*.7z
+*.tar
+*.tar.gz
+Build-Archive.ps1
+
+# --- Временные файлы PowerShell ---
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
+
+# --- Общее для Windows ---
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# --- Общее для всех проектов ---
+.DS_Store
+*.stackdump
