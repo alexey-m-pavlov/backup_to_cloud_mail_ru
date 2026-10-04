@@ -167,11 +167,12 @@ $lockFilePath = Join-Path $PSScriptRoot "rclone-backup.lock"
 $lockStream   = $null
 
 try {
-    $lockStream = [System.IO.File]::Open(
+    $lockStream = [System.IO.FileStream]::new(
         $lockFilePath,
         [System.IO.FileMode]::Create,
         [System.IO.FileAccess]::ReadWrite,
         [System.IO.FileShare]::None,
+        4096,
         [System.IO.FileOptions]::DeleteOnClose
     )
     Write-Host "Lock-файл захвачен: $lockFilePath"
