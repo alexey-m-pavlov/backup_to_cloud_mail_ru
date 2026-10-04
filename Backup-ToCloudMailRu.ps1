@@ -264,14 +264,14 @@ try {
         $logDir = Join-Path $PSScriptRoot $logDir
     }
 
-    # Создаём папку логов, если её нет
-    if (-not (Test-Path -LiteralPath $logDir)) {
-        try {
-            New-Item -ItemType Directory -Path $logDir -Force | Out-Null
-        } catch {
-            Write-Host "Не удалось создать папку логов '$logDir': $_" -ForegroundColor Red
-            exit 1
-        }
+    # Создаём папку логов, если её нет.
+    # Используем .NET API, а не New-Item: последний учитывает -WhatIf
+    # и не создаст папку, из-за чего логирование не сможет открыть файл.
+    try {
+        [void][System.IO.Directory]::CreateDirectory($logDir)
+    } catch {
+        Write-Host "Не удалось создать папку логов '$logDir': $_" -ForegroundColor Red
+        exit 1
     }
 
     # Имена логов на текущие сутки
