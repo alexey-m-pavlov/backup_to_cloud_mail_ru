@@ -12,7 +12,8 @@
       - проверку файлов, превышающих лимит облака;
       - раздельный лог неудачных файлов (failed_YYYYMMDD.log);
       - режим -WhatIf для безопасной проверки без реальных операций;
-      - логирование через единый StreamWriter с ручным управлением буфером.
+      - логирование через единый StreamWriter с ручным управлением буфером;
+      - корректное декодирование вывода rclone в UTF-8.
 
     Требования:
       - PowerShell 7+
@@ -62,7 +63,6 @@ $script:LogWriter        = $null
 $script:LogWriteCount    = 0
 $script:LogFlushInterval = 50
 
-# Состояние раздельного лога неудачных файлов
 $script:FailedLogWriter  = $null
 $script:FailedLogPath    = $null
 $script:FailedFileCount  = 0
@@ -248,8 +248,7 @@ try {
         $extraFlags = @($config.ExtraFlags)
     }
 
-    # Лимит размера файла (по умолчанию 2 ГБ). Int64, потому что 2 ГБ
-    # не помещается в Int32 (максимум 2147483647).
+    # Лимит размера файла. Int64, потому что 2 ГБ не помещается в Int32.
     [int64]$maxFileSizeBytes = 2147483648
     if ($config.PSObject.Properties.Name.Contains('MaxFileSizeBytes') -and [int64]$config.MaxFileSizeBytes -gt 0) {
         $maxFileSizeBytes = [int64]$config.MaxFileSizeBytes
@@ -264,8 +263,7 @@ try {
         $logDir = Join-Path $PSScriptRoot $logDir
     }
 
-    # Создаём папку логов, если её нет.
-    # Используем .NET API, а не New-Item: последний учитывает -WhatIf
+    # Создаём папку логов через .NET API — New-Item учитывает -WhatIf
     # и не создаст папку, из-за чего логирование не сможет открыть файл.
     try {
         [void][System.IO.Directory]::CreateDirectory($logDir)
@@ -331,7 +329,7 @@ try {
     Import-Module TUN.CredentialManager -ErrorAction Stop
 
     try {
-        # Забираем пароль конфигурации и кладём его в переменную окружения —
+        # Забираем пароль конфигурации и кладём в переменную окружения —
         # её унаследует процесс rclone
         $cred = Get-StoredCredential -Target $credentialTarget
         if (-not $cred) {
@@ -355,9 +353,10 @@ try {
     # --------------------------------------------------------
     # 6. Вызов rclone
     # --------------------------------------------------------
-    # Запускает rclone с общими аргументами, собирает stdout+stderr,
-    # пишет вывод в основной лог, парсит ошибки в failed-лог.
-    # Поддерживает -WhatIf через ShouldProcess.
+    # Запускает rclone, перехватывает stdout+stderr, пишет вывод в основной
+    # лог, парсит строки ERROR в failed-лог. Поддерживает -WhatIf.
+    # На время вызова переключает кодировку консоли на UTF-8 — иначе
+    # русские имена файлов в выводе rclone декодируются как CP866 и ломаются.
     function Invoke-Rclone {
         param(
             [Parameter(Mandatory)][string[]]$Arguments,
@@ -382,41 +381,51 @@ try {
 
         Write-Log $cmdLine
 
+        # Запоминаем текущие кодировки и переключаемся на UTF-8 на время вызова
+        $prevConsoleEncoding = [Console]::OutputEncoding
+        $prevOutputEncoding  = $OutputEncoding
+
         try {
-            # Запуск и захват вывода
+            [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+            $OutputEncoding           = [System.Text.UTF8Encoding]::new($false)
+
             $output = & $rclonePath @allArgs 2>&1
             $exitCode = $LASTEXITCODE
-
-            $foundErrors = 0
-            foreach ($line in $output) {
-                if (-not $line) { continue }
-                Write-Log "  rclone: $line"
-
-                # Строки вида: 2024/01/01 12:00:00 ERROR : path/to/file: сообщение
-                if ($line -match '^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} ERROR\s*:\s*(.+?):\s*(.+)$') {
-                    $failedFile = $Matches[1].Trim()
-                    $failedMsg  = $Matches[2].Trim()
-                    Write-FailedFile -FolderDisplay $FolderDisplay -File $failedFile -Message $failedMsg
-                    $foundErrors++
-                    $script:FailedFileCount++
-                }
-            }
-
-            # Ненулевой код без конкретных ошибок в выводе — общая запись
-            if ($exitCode -ne 0 -and $foundErrors -eq 0) {
-                Write-FailedFile -FolderDisplay $FolderDisplay -File '<общая ошибка>' `
-                    -Message "rclone завершился с кодом $exitCode"
-                $script:FailedFileCount++
-            }
-
-            return $exitCode
         } catch {
             Write-Log "Ошибка запуска rclone: $_" -Level ERROR
             Write-FailedFile -FolderDisplay $FolderDisplay -File '<исключение>' `
                 -Message "Ошибка запуска процесса rclone: $_"
             $script:FailedFileCount++
             return 1
+        } finally {
+            [Console]::OutputEncoding = $prevConsoleEncoding
+            $OutputEncoding           = $prevOutputEncoding
         }
+
+        # Разбираем вывод rclone
+        $foundErrors = 0
+        foreach ($line in $output) {
+            if (-not $line) { continue }
+            Write-Log "  rclone: $line"
+
+            # Строки вида: 2024/01/01 12:00:00 ERROR : path/to/file: сообщение
+            if ($line -match '^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} ERROR\s*:\s*(.+?):\s*(.+)$') {
+                $failedFile = $Matches[1].Trim()
+                $failedMsg  = $Matches[2].Trim()
+                Write-FailedFile -FolderDisplay $FolderDisplay -File $failedFile -Message $failedMsg
+                $foundErrors++
+                $script:FailedFileCount++
+            }
+        }
+
+        # Ненулевой код без конкретных ошибок в выводе — общая запись
+        if ($exitCode -ne 0 -and $foundErrors -eq 0) {
+            Write-FailedFile -FolderDisplay $FolderDisplay -File '<общая ошибка>' `
+                -Message "rclone завершился с кодом $exitCode"
+            $script:FailedFileCount++
+        }
+
+        return $exitCode
     }
 
     # --------------------------------------------------------
