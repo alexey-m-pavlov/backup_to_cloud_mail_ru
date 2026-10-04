@@ -13,6 +13,9 @@ rclone-backup.lock
 backup.config.json
 
 # --- Секреты и артефакты rclone ---
+# Зашифрованный rclone.conf лежит в secrets/ рядом со скриптом.
+# Не коммитим папку целиком — там могут появиться другие секреты.
+secrets/
 rclone.conf
 rclone-credential.xml
 *.sec
