@@ -13,6 +13,7 @@
       - раздельный лог неудачных файлов (failed_YYYYMMDD.log);
       - режим -WhatIf для безопасной проверки без реальных операций;
       - логирование через единый StreamWriter с ручным управлением буфером;
+      - потоковый вывод rclone: строки попадают в лог по мере поступления;
       - корректное декодирование вывода rclone в UTF-8.
 
     Требования:
@@ -353,10 +354,10 @@ try {
     # --------------------------------------------------------
     # 6. Вызов rclone
     # --------------------------------------------------------
-    # Запускает rclone, перехватывает stdout+stderr, пишет вывод в основной
-    # лог, парсит строки ERROR в failed-лог. Поддерживает -WhatIf.
-    # На время вызова переключает кодировку консоли на UTF-8 — иначе
-    # русские имена файлов в выводе rclone декодируются как CP866 и ломаются.
+    # Запускает rclone и обрабатывает его вывод построчно по мере поступления:
+    # строки сразу попадают в лог и консоль, а не собираются в буфер до
+    # завершения процесса. Строки ERROR парсятся в failed-лог.
+    # На время вызова кодировка консоли переключается в UTF-8.
     function Invoke-Rclone {
         param(
             [Parameter(Mandatory)][string[]]$Arguments,
@@ -381,7 +382,11 @@ try {
 
         Write-Log $cmdLine
 
-        # Запоминаем текущие кодировки и переключаемся на UTF-8 на время вызова
+        # Аккумулятор в хеш-таблице: изменения внутри ForEach-Object
+        # сохраняются между итерациями и доступны после конвейера.
+        $state = @{ FoundErrors = 0 }
+
+        # Запоминаем кодировки и переключаемся на UTF-8 на время вызова
         $prevConsoleEncoding = [Console]::OutputEncoding
         $prevOutputEncoding  = $OutputEncoding
 
@@ -389,7 +394,23 @@ try {
             [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
             $OutputEncoding           = [System.Text.UTF8Encoding]::new($false)
 
-            $output = & $rclonePath @allArgs 2>&1
+            # Потоковая обработка вывода rclone: каждая строка — сразу в лог
+            & $rclonePath @allArgs 2>&1 | ForEach-Object {
+                $line = $_.ToString()
+                if (-not $line) { return }
+
+                Write-Log "  rclone: $line"
+
+                # Строки вида: 2024/01/01 12:00:00 ERROR : path/to/file: сообщение
+                if ($line -match '^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} ERROR\s*:\s*(.+?):\s*(.+)$') {
+                    $failedFile = $Matches[1].Trim()
+                    $failedMsg  = $Matches[2].Trim()
+                    Write-FailedFile -FolderDisplay $FolderDisplay -File $failedFile -Message $failedMsg
+                    $state.FoundErrors++
+                    $script:FailedFileCount++
+                }
+            }
+
             $exitCode = $LASTEXITCODE
         } catch {
             Write-Log "Ошибка запуска rclone: $_" -Level ERROR
@@ -402,24 +423,8 @@ try {
             $OutputEncoding           = $prevOutputEncoding
         }
 
-        # Разбираем вывод rclone
-        $foundErrors = 0
-        foreach ($line in $output) {
-            if (-not $line) { continue }
-            Write-Log "  rclone: $line"
-
-            # Строки вида: 2024/01/01 12:00:00 ERROR : path/to/file: сообщение
-            if ($line -match '^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} ERROR\s*:\s*(.+?):\s*(.+)$') {
-                $failedFile = $Matches[1].Trim()
-                $failedMsg  = $Matches[2].Trim()
-                Write-FailedFile -FolderDisplay $FolderDisplay -File $failedFile -Message $failedMsg
-                $foundErrors++
-                $script:FailedFileCount++
-            }
-        }
-
         # Ненулевой код без конкретных ошибок в выводе — общая запись
-        if ($exitCode -ne 0 -and $foundErrors -eq 0) {
+        if ($exitCode -ne 0 -and $state.FoundErrors -eq 0) {
             Write-FailedFile -FolderDisplay $FolderDisplay -File '<общая ошибка>' `
                 -Message "rclone завершился с кодом $exitCode"
             $script:FailedFileCount++
