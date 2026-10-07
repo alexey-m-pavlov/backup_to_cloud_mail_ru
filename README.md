@@ -1,8 +1,8 @@
 # Backup-ToCloudMailRu
 
 Автоматизированное резервное копирование набора локальных папок в облако
-**Cloud@mail.ru** через WebDAV. Реализовано на PowerShell 7 и `rclone`,
-запускается из Планировщика задач Windows 11.
+**Cloud@mail.ru** через rclone. Реализовано на PowerShell 7, запускается
+из Планировщика задач Windows 11.
 
 ## Содержание
 
@@ -10,6 +10,7 @@
 - [Состав проекта](#состав-проекта)
 - [Требования](#требования)
 - [Разовая настройка](#разовая-настройка)
+- [Кэширование хэшей](#кэширование-хэшей)
 - [Конфигурация](#конфигурация)
 - [Особенность путей в JSON](#особенность-путей-в-json)
 - [Запуск из Планировщика задач](#запуск-из-планировщика-задач)
@@ -31,6 +32,8 @@
 - Единый лог-файл на сутки, ротация по сроку хранения.
 - Логирование через `StreamWriter` с буферизацией.
 - Маски исключений для каждой папки.
+- Кэширование хэшей через hasher-remote: повторные запуски проходят
+  значительно быстрее, так как rclone не перечитывает неизменённые файлы.
 
 ## Состав проекта
 
@@ -114,16 +117,75 @@ rclone --config "C:\Scripts\Backup-ToCloudMailRu\secrets\rclone.conf" config
 rclone --config "C:\Scripts\Backup-ToCloudMailRu\secrets\rclone.conf" lsd mailru:
 ```
 
-Зашифруйте конфигурацию rclone:
+### 3. Добавление hasher-remote
+
+После того как remote `mailru` создан, добавьте в `rclone.conf` две секции —
+hasher-обёртки для кэширования хэшей. Откройте конфиг:
+
+```powershell
+rclone --config "C:\Scripts\Backup-ToCloudMailRu\secrets\rclone.conf" config
+```
+
+Выберите `n` (новый remote) и создайте первый:
+
+- Имя: `mailru-hasher`
+- Тип: `hasher`
+- `remote`: `mailru:`
+- `hashes`: `mailru`
+- `max_age`: `off`
+
+Затем второй:
+
+- Имя: `local-hasher`
+- Тип: `hasher`
+- `remote`: оставить **пустым** (Enter)
+- `hashes`: `mailru`
+- `max_age`: `off`
+
+В итоге в `rclone.conf` должно получиться:
+
+```ini
+[mailru]
+type = mailru
+user = ваш_логин@mail.ru
+pass = <обфусцированный пароль>
+token = <токен>
+
+[mailru-hasher]
+type = hasher
+remote = mailru:
+hashes = mailru
+max_age = off
+
+[local-hasher]
+type = hasher
+remote =
+hashes = mailru
+max_age = off
+```
+
+**Зачем два hasher-remote:**
+
+- `mailru-hasher` — кэширует хэши файлов на стороне облака. Используется
+  как `RemoteName` в конфиге.
+- `local-hasher` — кэширует хэши локальных файлов. Скрипт обращается
+  к нему как к источнику (`local-hasher:D:\Path`). Имя `local-hasher`
+  **жёстко зашито в коде** — если переименуете секцию, поправьте скрипт.
+
+У обоих должен быть `hashes = mailru` — это модифицированный SHA1,
+который использует Mail.ru. Только с этим типом хэши локальной и удалённой
+стороны будут сопоставимы.
+
+### 4. Шифрование конфигурации rclone
 
 ```powershell
 rclone --config "C:\Scripts\Backup-ToCloudMailRu\secrets\rclone.conf" config
 ```
 
 Выберите `s` (Set configuration password) и задайте пароль. Запомните его —
-он понадобится на шаге 3.
+он понадобится на следующем шаге.
 
-### 3. Сохранение пароля конфигурации в Credential Manager
+### 5. Сохранение пароля конфигурации в Credential Manager
 
 От имени того же пользователя, под которым будет работать задача:
 
@@ -146,23 +208,80 @@ Uninstall-Module -Name CredentialManager -AllVersions -Force
 Install-Module -Name TUN.CredentialManager -Scope CurrentUser -Force
 ```
 
-### 4. Проверка связки
+### 6. Проверка связки
 
 ```powershell
 $env:RCLONE_CONFIG_PASS = (Get-StoredCredential -Target "rclone-config-pass").GetNetworkCredential().Password
-rclone --config "C:\Scripts\Backup-ToCloudMailRu\secrets\rclone.conf" lsd mailru:
+rclone --config "C:\Scripts\Backup-ToCloudMailRu\secrets\rclone.conf" lsd mailru-hasher:
 $env:RCLONE_CONFIG_PASS = $null
 ```
 
 Если команда вывела список папок — всё настроено.
 
-### 5. Пробный запуск
+### 7. Пробный запуск
 
 ```powershell
 .\Backup-ToCloudMailRu.ps1 -WhatIf
 ```
 
 Скрипт покажет, какие операции были бы выполнены, без реальной загрузки.
+
+## Кэширование хэшей
+
+Ключевая особенность текущей схемы — **кэш хэшей** в hasher-remote. Это
+радикально ускоряет повторные запуски.
+
+### Как это работает
+
+1. Первый запуск: rclone перечитывает все локальные файлы, вычисляет хэши
+   типа `mailru` и **сохраняет их в локальную базу данных**.
+2. Последующие запуски: rclone берёт хэши из кэша. Перечитываются только
+   файлы, у которых изменился размер или mtime. Файлы, которые не менялись,
+   не читаются вообще.
+3. Сравнение с облаком идёт по `--checksum` — по хэшам, а не по размеру
+   и времени.
+
+### Где хранится кэш
+
+База данных hasher лежит в кэш-директории rclone:
+
+```
+%LOCALAPPDATA%\rclone\kv\local-hasher.bolt
+%LOCALAPPDATA%\rclone\kv\mailru-hasher.bolt
+```
+
+Точный путь можно узнать командой:
+
+```powershell
+rclone config paths
+```
+
+Не удаляйте эти файлы — иначе первый запуск снова будет долгим.
+
+### Как обновить кэш вручную
+
+Если нужно принудительно пересчитать все хэши (например, после переноса
+на новую машину или при подозрении на порчу кэша), используйте `hashsum`
+с флагом `--download`:
+
+```powershell
+rclone hashsum mailru --download "local-hasher:D:\Energames"
+rclone hashsum mailru --download "local-hasher:D:\Users\pavlov\Pictures\Фотографии"
+```
+
+Подставьте свои пути из `Folders[].LocalPath`. Команда перечитает каждый
+файл, обновит кэш и выведет список хэшей.
+
+### Сброс кэша
+
+Полностью очистить кэш hasher:
+
+```powershell
+rclone backend drop local-hasher:
+rclone backend drop mailru-hasher:
+```
+
+После этого следующий запуск будет таким же долгим, как первый.
 
 ## Конфигурация
 
@@ -172,7 +291,7 @@ $env:RCLONE_CONFIG_PASS = $null
 |---|---|---|
 | `RclonePath` | Да | Полный путь к `rclone.exe` |
 | `RcloneConfigPath` | Нет | Путь к `rclone.conf`. Относительный — от папки скрипта |
-| `RemoteName` | Да | Имя remote из конфига rclone (например, `mailru`) |
+| `RemoteName` | Да | Имя hasher-remote для облака (например, `mailru-hasher`) |
 | `TransferMode` | Нет | `copy` (по умолчанию) или `sync` |
 | `ExtraFlags` | Нет | Массив дополнительных флагов rclone |
 | `MaxFileSizeBytes` | Нет | Лимит размера файла. По умолчанию 2 ГБ |
@@ -315,7 +434,7 @@ rclone требует там **прямые слэши**: `"/Backup/Documents"`.
 
 Пароль конфигурации в Credential Manager перенести **нельзя**: он
 зашифрован DPAPI и привязан к пользователю и машине. На новой машине
-нужно заново выполнить шаг 3 разовой настройки:
+нужно заново выполнить шаг 5 разовой настройки:
 
 ```powershell
 Import-Module TUN.CredentialManager
@@ -325,14 +444,19 @@ New-StoredCredential -Target "rclone-config-pass" -Credential $cred -Persist Loc
 
 Используйте **тот же** пароль, что и на исходной машине.
 
+Кэш хэшей (`%LOCALAPPDATA%\rclone\kv\*.bolt`) переносить **не нужно** —
+на новой машине он заполнится при первом запуске автоматически.
+
 ## Известные ограничения
 
 - **Лимит 2 ГБ на файл** на бесплатном тарифе Cloud@mail.ru. Файлы больше
   лимита логируются как `WARNING` и пропускаются.
-- **Временные метки.** WebDAV-сервер Cloud@mail.ru может не сохранять
-  `mtime` при загрузке. Флаг `--checksum` в `ExtraFlags` заставляет rclone
-  сравнивать файлы по хешу. Если backend mailru не поддерживает серверные
-  хеши — rclone откатится на сравнение по размеру и времени.
+- **Первый запуск долгий.** rclone перечитывает все локальные файлы, чтобы
+  заполнить кэш хэшей. На больших папках (десятки тысяч файлов) это может
+  занять часы. Последующие запуски проходят значительно быстрее.
+- **Временные метки.** Флаг `--checksum` в `ExtraFlags` заставляет rclone
+  сравнивать файлы по хэшу, а не по размеру и mtime. Это решает проблему
+  с WebDAV, который может не сохранять mtime при загрузке.
 - **Нет теневого копирования (VSS).** Файлы, открытые другими приложениями,
   могут копироваться в несогласованном состоянии.
 - **Одна копия у одного провайдера.** Не соответствует правилу 3-2-1.

@@ -14,11 +14,24 @@
       - режим -WhatIf для безопасной проверки без реальных операций;
       - логирование через единый StreamWriter с ручным управлением буфером;
       - потоковый вывод rclone: строки попадают в лог по мере поступления;
-      - корректное декодирование вывода rclone в UTF-8.
+      - корректное декодирование вывода rclone в UTF-8;
+      - кэширование хешей через hasher-remote, что ускоряет повторные запуски.
+
+    СХЕМА ИСТОЧНИКОВ:
+      Локальные файлы читаются через hasher-remote с именем "local-hasher".
+      Имя зашито в коде и должно совпадать с секцией в rclone.conf.
+      Удалённая сторона берётся из поля RemoteName (в конфиге это, как
+      правило, "mailru-hasher" — hasher-обёртка над remote "mailru").
 
     Требования:
       - PowerShell 7+
-      - rclone, настроенный remote для Cloud@mail.ru (тип mailru или webdav)
+      - rclone с настроенным remote mailru (тип mailru)
+      - Два hasher-remote в rclone.conf:
+          [local-hasher]  — обёртка над локальной ФС (remote =)
+          [mailru-hasher] — обёртка над mailru: (remote = mailru:)
+        У обоих: hashes = mailru, max_age = off.
+        Без этого кэш хешей работать не будет, и каждый запуск будет
+        пересчитывать хеши заново.
       - Конфигурация rclone зашифрована паролем
       - Модуль TUN.CredentialManager
         (Install-Module TUN.CredentialManager -Scope CurrentUser)
@@ -39,6 +52,10 @@
     удвоением. В полях RclonePath, RcloneConfigPath, Logging.Directory и
     Folders[].LocalPath пишите двойные бэкслэши: "C:\\Folder\\Sub".
     Пути к WebDAV (Folders[].RemotePath) остаются с прямыми слэшами: "/Backup/X".
+
+    ИМЯ HASER-REMOTE: "local-hasher" жёстко зашито в блоке 7. Если в
+    rclone.conf секция называется иначе — поправьте строку
+    $localSource = "local-hasher:$localPath" или вынесите имя в конфиг.
 
     Коды выхода:
       0 — успех;
@@ -233,8 +250,14 @@ try {
         $rcloneConfigPath = Join-Path $PSScriptRoot $rcloneConfigPath
     }
 
+    # Remote для удалённой стороны берётся из конфига.
+    # Ожидается hasher-обёртка над mailru: (например, "mailru-hasher").
     $remoteName       = [string]$config.RemoteName
     $credentialTarget = [string]$config.CredentialTarget
+
+    # Имя hasher-remote для локальной стороны. Жёстко зашито — должно
+    # совпадать с секцией [local-hasher] в rclone.conf.
+    $localHasherRemote = 'local-hasher'
 
     # Режим передачи: copy или sync
     $transferMode = if ($config.PSObject.Properties.Name.Contains('TransferMode')) { [string]$config.TransferMode } else { 'copy' }
@@ -312,7 +335,8 @@ try {
     Write-Log "Конфигурация: $ConfigPath"
     Write-Log "rclone: $rclonePath"
     Write-Log "rclone.conf: $rcloneConfigPath"
-    Write-Log "Remote: $remoteName"
+    Write-Log "Remote (целевой): $remoteName"
+    Write-Log "Remote (источник): $localHasherRemote"
     Write-Log "Режим: $transferMode"
     Write-Log "WhatIf: $($WhatIfPreference)"
     Write-Log "Лимит размера файла: $([math]::Round($maxFileSizeBytes / 1GB, 2)) ГБ"
@@ -487,8 +511,11 @@ try {
             Write-Log "Ошибка при сканировании размеров файлов: $_" -Level WARNING
         }
 
-        # Аргументы rclone: режим, локальная папка, remote:путь
-        $rcloneArgs = @($transferMode, $localPath, "${remoteName}:$remotePath")
+        # Аргументы rclone: режим, источник, получатель.
+        # Источник — локальный путь через hasher-remote (кэш хешей).
+        # Получатель — удалённый hasher-remote (или обычный remote) из конфига.
+        $localSource = "$localHasherRemote`:$localPath"
+        $rcloneArgs = @($transferMode, $localSource, "${remoteName}:$remotePath")
 
         # Исключения
         if (-not [string]::IsNullOrWhiteSpace($excludeMask)) {
