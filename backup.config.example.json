@@ -22,7 +22,7 @@
       "Enabled": true,
       "LocalPath": "D:\\Path\\To\\Folder",
       "RemotePath": "/Backup/FolderName",
-      "ExcludeMask": "*.tmp; *.bak; ~*"
+      "ExcludeMask": "*.tmp; *.bak; ~*; /somefolder/**"
     }
   ]
 }
