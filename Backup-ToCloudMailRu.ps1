@@ -15,23 +15,23 @@
       - логирование через единый StreamWriter с ручным управлением буфером;
       - потоковый вывод rclone: строки попадают в лог по мере поступления;
       - корректное декодирование вывода rclone в UTF-8;
-      - кэширование хешей через hasher-remote, что ускоряет повторные запуски.
+      - кэш хэшей локальных файлов через hasher-remote, что ускоряет
+        повторные запуски (rclone не перечитывает неизменённые файлы).
 
     СХЕМА ИСТОЧНИКОВ:
-      Локальные файлы читаются через hasher-remote с именем "local-hasher".
-      Имя зашито в коде и должно совпадать с секцией в rclone.conf.
-      Удалённая сторона берётся из поля RemoteName (в конфиге это, как
-      правило, "mailru-hasher" — hasher-обёртка над remote "mailru").
+      Источник — локальный путь, переданный rclone через hasher-remote
+      "local-hasher". Имя зашито в коде и должно совпадать с секцией
+      [local-hasher] в rclone.conf.
+      Получатель — remote из поля RemoteName (как правило, "mailru").
 
     Требования:
       - PowerShell 7+
       - rclone с настроенным remote mailru (тип mailru)
-      - Два hasher-remote в rclone.conf:
-          [local-hasher]  — обёртка над локальной ФС (remote =)
-          [mailru-hasher] — обёртка над mailru: (remote = mailru:)
-        У обоих: hashes = mailru, max_age = off.
+      - Hasher-remote в rclone.conf:
+          [local-hasher] — обёртка над локальной ФС (remote =)
+        Параметры: hashes = mailru, max_age = off.
         Без этого кэш хешей работать не будет, и каждый запуск будет
-        пересчитывать хеши заново.
+        пересчитывать хеши локальных файлов заново.
       - Конфигурация rclone зашифрована паролем
       - Модуль TUN.CredentialManager
         (Install-Module TUN.CredentialManager -Scope CurrentUser)
@@ -53,9 +53,9 @@
     Folders[].LocalPath пишите двойные бэкслэши: "C:\\Folder\\Sub".
     Пути к WebDAV (Folders[].RemotePath) остаются с прямыми слэшами: "/Backup/X".
 
-    ИМЯ HASER-REMOTE: "local-hasher" жёстко зашито в блоке 7. Если в
-    rclone.conf секция называется иначе — поправьте строку
-    $localSource = "local-hasher:$localPath" или вынесите имя в конфиг.
+    ИМЯ HASHER-REMOTE: "local-hasher" жёстко зашито в блоке 7. Если в
+    rclone.conf секция называется иначе — поправьте переменную
+    $localHasherRemote в блоке 2 или переименуйте секцию в rclone.conf.
 
     Коды выхода:
       0 — успех;
@@ -250,8 +250,7 @@ try {
         $rcloneConfigPath = Join-Path $PSScriptRoot $rcloneConfigPath
     }
 
-    # Remote для удалённой стороны берётся из конфига.
-    # Ожидается hasher-обёртка над mailru: (например, "mailru-hasher").
+    # Имя remote для облака из конфигурации (обычно "mailru").
     $remoteName       = [string]$config.RemoteName
     $credentialTarget = [string]$config.CredentialTarget
 
@@ -512,8 +511,8 @@ try {
         }
 
         # Аргументы rclone: режим, источник, получатель.
-        # Источник — локальный путь через hasher-remote (кэш хешей).
-        # Получатель — удалённый hasher-remote (или обычный remote) из конфига.
+        # Источник — локальный путь через hasher-remote (кэш хэшей).
+        # Получатель — remote для облака из конфига.
         $localSource = "$localHasherRemote`:$localPath"
         $rcloneArgs = @($transferMode, $localSource, "${remoteName}:$remotePath")
 
