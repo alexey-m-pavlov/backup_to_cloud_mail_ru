@@ -41,7 +41,7 @@
 ## Состав проекта
 
 ```
-Backup-ToCloudMailRu/
+backup_to_cloud_mail_ru/
 ├── .gitignore
 ├── Backup-ToCloudMailRu.ps1
 ├── backup.config.json              локальный, в git не попадает
@@ -77,7 +77,7 @@ Backup-ToCloudMailRu/
 ### 1. Создание структуры папок
 
 ```
-Backup-ToCloudMailRu/
+backup_to_cloud_mail_ru/
 ├── secrets/
 └── logs/
 ```
@@ -97,14 +97,14 @@ Backup-ToCloudMailRu/
 сессии PowerShell):
 
 ```powershell
-$env:RCLONE_CONFIG = "C:\Scripts\Backup-ToCloudMailRu\secrets\rclone.conf"
+$env:RCLONE_CONFIG = "C:\Scripts\backup_to_cloud_mail_ru\secrets\rclone.conf"
 rclone config
 ```
 
 **Способ B — через параметр `--config`** при каждом вызове:
 
 ```powershell
-rclone --config "C:\Scripts\Backup-ToCloudMailRu\secrets\rclone.conf" config
+rclone --config "C:\Scripts\backup_to_cloud_mail_ru\secrets\rclone.conf" config
 ```
 
 В диалоге `rclone config`:
@@ -117,7 +117,7 @@ rclone --config "C:\Scripts\Backup-ToCloudMailRu\secrets\rclone.conf" config
 Проверьте подключение:
 
 ```powershell
-rclone --config "C:\Scripts\Backup-ToCloudMailRu\secrets\rclone.conf" lsd mailru:
+rclone --config "C:\Scripts\backup_to_cloud_mail_ru\secrets\rclone.conf" lsd mailru:
 ```
 
 ### 3. Добавление hasher-remote для локальных файлов
@@ -127,7 +127,7 @@ rclone --config "C:\Scripts\Backup-ToCloudMailRu\secrets\rclone.conf" lsd mailru
 кэширует хэши локальных файлов. Откройте конфиг:
 
 ```powershell
-rclone --config "C:\Scripts\Backup-ToCloudMailRu\secrets\rclone.conf" config
+rclone --config "C:\Scripts\backup_to_cloud_mail_ru\secrets\rclone.conf" config
 ```
 
 Выберите `n` (новый remote) и создайте:
@@ -161,12 +161,12 @@ max_age = off
 - `hashes = mailru` — модифицированный SHA1, который использует Mail.ru.
   Другие типы хэшей в этой схеме не нужны.
 - Имя `local-hasher` **жёстко зашито в скрипте**. Если переименуете секцию —
-  поправьте переменную `$localHasherRemote` в блоке 7 скрипта.
+  поправьте переменную `$localHasherRemote` в блоке 2 скрипта.
 
 ### 4. Шифрование конфигурации rclone
 
 ```powershell
-rclone --config "C:\Scripts\Backup-ToCloudMailRu\secrets\rclone.conf" config
+rclone --config "C:\Scripts\backup_to_cloud_mail_ru\secrets\rclone.conf" config
 ```
 
 Выберите `s` (Set configuration password) и задайте пароль. Запомните его —
@@ -199,7 +199,7 @@ Install-Module -Name TUN.CredentialManager -Scope CurrentUser -Force
 
 ```powershell
 $env:RCLONE_CONFIG_PASS = (Get-StoredCredential -Target "rclone-config-pass").GetNetworkCredential().Password
-rclone --config "C:\Scripts\Backup-ToCloudMailRu\secrets\rclone.conf" lsd mailru:
+rclone --config "C:\Scripts\backup_to_cloud_mail_ru\secrets\rclone.conf" lsd mailru:
 $env:RCLONE_CONFIG_PASS = $null
 ```
 
@@ -393,9 +393,9 @@ rclone требует там **прямые слэши**: `"/Backup/Documents"`.
    - **Программа/скрипт**: `pwsh.exe`
    - **Аргументы**:
      ```
-     -NoProfile -ExecutionPolicy Bypass -File "C:\Scripts\Backup-ToCloudMailRu\Backup-ToCloudMailRu.ps1"
+     -NoProfile -ExecutionPolicy Bypass -File "C:\Scripts\backup_to_cloud_mail_ru\Backup-ToCloudMailRu.ps1"
      ```
-   - **Рабочая папка**: `C:\Scripts\Backup-ToCloudMailRu`
+   - **Рабочая папка**: `C:\Scripts\backup_to_cloud_mail_ru`
      (папка, где лежат `Backup-ToCloudMailRu.ps1` и `backup.config.json`).
 
 5. Вкладка **«Условия»**:
