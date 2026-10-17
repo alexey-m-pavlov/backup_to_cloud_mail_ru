@@ -16,7 +16,9 @@
       - потоковый вывод rclone: строки попадают в лог по мере поступления;
       - корректное декодирование вывода rclone в UTF-8;
       - кэш хэшей локальных файлов через hasher-remote, что ускоряет
-        повторные запуски (rclone не перечитывает неизменённые файлы).
+        повторные запуски (rclone не перечитывает неизменённые файлы);
+      - восстановление целостности лог-файла после аварийного завершения
+        (незавершённая последняя строка не слипается с новой записью).
 
     СХЕМА ИСТОЧНИКОВ:
       Источник — локальный путь, переданный rclone через hasher-remote
@@ -112,9 +114,41 @@ function Write-Log {
     }
 }
 
+# Проверяет, заканчивается ли файл переводом строки, и при необходимости
+# дописывает его. Нужно после аварийного завершения, когда последняя
+# запись могла остаться недописанной — иначе следующая запись приклеится
+# к обрывку.
+function Ensure-TrailingNewline {
+    param([Parameter(Mandatory)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+
+    try {
+        $fi = [System.IO.FileInfo]::new($Path)
+        if ($fi.Length -eq 0) { return }
+
+        $fs = [System.IO.File]::OpenRead($Path)
+        try {
+            [void]$fs.Seek(-1, [System.IO.SeekOrigin]::End)
+            $lastByte = $fs.ReadByte()
+        } finally {
+            $fs.Dispose()
+        }
+
+        # 10 = LF (последний байт последовательности CR LF)
+        if ($lastByte -ne 10) {
+            [System.IO.File]::AppendAllText($Path, [Environment]::NewLine)
+        }
+    } catch {
+        # Если файл нельзя прочитать — не мешаем открытию на запись.
+        # StreamWriter справится или выдаст свою ошибку.
+    }
+}
+
 # Открывает основной лог: append, UTF-8 без BOM, буферизация вручную.
 function Open-LogWriter {
     param([Parameter(Mandatory)][string]$Path)
+    Ensure-TrailingNewline -Path $Path
     $script:LogWriter = [System.IO.StreamWriter]::new(
         $Path,
         $true,
@@ -139,6 +173,7 @@ function Close-LogWriter {
 # Открывает раздельный лог неудачных файлов: append, UTF-8 без BOM, AutoFlush.
 function Open-FailedLogWriter {
     param([Parameter(Mandatory)][string]$Path)
+    Ensure-TrailingNewline -Path $Path
     $script:FailedLogWriter = [System.IO.StreamWriter]::new(
         $Path,
         $true,
