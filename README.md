@@ -88,6 +88,9 @@ backup_to_cloud_mail_ru/
 Папки создаются автоматически при первом запуске скрипта, но `secrets/`
 удобнее создать заранее — туда вы положите `rclone.conf`.
 
+Далее в примерах путь к папке проекта обозначается как
+`<PROJECT_PATH>` — замените его на свой, например `C:\Scripts\backup_to_cloud_mail_ru`.
+
 ### 2. Настройка rclone для Cloud@mail.ru
 
 Создайте пароль для внешних приложений в настройках безопасности Mail.ru.
@@ -100,14 +103,14 @@ backup_to_cloud_mail_ru/
 сессии PowerShell):
 
 ```powershell
-$env:RCLONE_CONFIG = "C:\Scripts\backup_to_cloud_mail_ru\secrets\rclone.conf"
+$env:RCLONE_CONFIG = "<PROJECT_PATH>\secrets\rclone.conf"
 rclone config
 ```
 
 **Способ B — через параметр `--config`** при каждом вызове:
 
 ```powershell
-rclone --config "C:\Scripts\backup_to_cloud_mail_ru\secrets\rclone.conf" config
+rclone --config "<PROJECT_PATH>\secrets\rclone.conf" config
 ```
 
 В диалоге `rclone config`:
@@ -120,7 +123,7 @@ rclone --config "C:\Scripts\backup_to_cloud_mail_ru\secrets\rclone.conf" config
 Проверьте подключение:
 
 ```powershell
-rclone --config "C:\Scripts\backup_to_cloud_mail_ru\secrets\rclone.conf" lsd mailru:
+rclone --config "<PROJECT_PATH>\secrets\rclone.conf" lsd mailru:
 ```
 
 ### 3. Добавление hasher-remote для локальных файлов
@@ -130,7 +133,7 @@ rclone --config "C:\Scripts\backup_to_cloud_mail_ru\secrets\rclone.conf" lsd mai
 кэширует хэши локальных файлов. Откройте конфиг:
 
 ```powershell
-rclone --config "C:\Scripts\backup_to_cloud_mail_ru\secrets\rclone.conf" config
+rclone --config "<PROJECT_PATH>\secrets\rclone.conf" config
 ```
 
 Выберите `n` (новый remote) и создайте:
@@ -146,9 +149,9 @@ rclone --config "C:\Scripts\backup_to_cloud_mail_ru\secrets\rclone.conf" config
 ```ini
 [mailru]
 type = mailru
-user = ваш_логин@mail.ru
-pass = <обфусцированный пароль>
-token = <токен>
+user = <EMAIL>@mail.ru
+pass = <OBFUSCATED_PASSWORD>
+token = <TOKEN>
 quirks = retry400
 
 [local-hasher]
@@ -174,7 +177,7 @@ max_age = off
 ### 4. Шифрование конфигурации rclone
 
 ```powershell
-rclone --config "C:\Scripts\backup_to_cloud_mail_ru\secrets\rclone.conf" config
+rclone --config "<PROJECT_PATH>\secrets\rclone.conf" config
 ```
 
 Выберите `s` (Set configuration password) и задайте пароль. Запомните его —
@@ -207,7 +210,7 @@ Install-Module -Name TUN.CredentialManager -Scope CurrentUser -Force
 
 ```powershell
 $env:RCLONE_CONFIG_PASS = (Get-StoredCredential -Target "rclone-config-pass").GetNetworkCredential().Password
-rclone --config "C:\Scripts\backup_to_cloud_mail_ru\secrets\rclone.conf" lsd mailru:
+rclone --config "<PROJECT_PATH>\secrets\rclone.conf" lsd mailru:
 $env:RCLONE_CONFIG_PASS = $null
 ```
 
@@ -263,8 +266,7 @@ rclone config paths
 с флагом `--download`:
 
 ```powershell
-rclone hashsum mailru --download "local-hasher:D:\Energames"
-rclone hashsum mailru --download "local-hasher:D:\Users\pavlov\Pictures\Фотографии"
+rclone hashsum mailru --download "local-hasher:<LOCAL_PATH>"
 ```
 
 Подставьте свои пути из `Folders[].LocalPath`. Команда перечитает каждый
@@ -350,7 +352,7 @@ JSON использует обратный слэш (`\`) как служебн�
 | Что вы хотите | Что писать в JSON |
 |---|---|
 | `C:\Tools\rclone\rclone.exe` | `"C:\\Tools\\rclone\\rclone.exe"` |
-| `D:\ImportantData\Documents` | `"D:\\ImportantData\\Documents"` |
+| `D:\Data\Documents` | `"D:\\Data\\Documents"` |
 | `\\server\share\folder` (UNC) | `"\\\\server\\share\\folder"` |
 | `logs` (относительный) | `"logs"` — без изменений |
 | `secrets\rclone.conf` (относительный) | `"secrets\\rclone.conf"` |
@@ -401,9 +403,9 @@ rclone требует там **прямые слэши**: `"/Backup/Documents"`.
    - **Программа/скрипт**: `pwsh.exe`
    - **Аргументы**:
      ```
-     -NoProfile -ExecutionPolicy Bypass -File "C:\Scripts\backup_to_cloud_mail_ru\Backup-ToCloudMailRu.ps1"
+     -NoProfile -ExecutionPolicy Bypass -File "<PROJECT_PATH>\Backup-ToCloudMailRu.ps1"
      ```
-   - **Рабочая папка**: `C:\Scripts\backup_to_cloud_mail_ru`
+   - **Рабочая папка**: `<PROJECT_PATH>`
      (папка, где лежат `Backup-ToCloudMailRu.ps1` и `backup.config.json`).
 
 5. Вкладка **«Условия»**:
@@ -561,11 +563,11 @@ New-StoredCredential -Target "rclone-config-pass" -Credential $cred -Persist Loc
 Это известная проблема бэкенда Mail.ru, для борьбы с которой в rclone
 предусмотрен специальный флаг (quirk) `retry400`. Он заставляет клиент
 **повторять запрос** при получении ответа `400`, что часто помогает
-обойти временный сбой на стороне сервера[reference:1].
+обойти временный сбой на стороне сервера.
 
 > **Важно:** `quirks` — это низкоуровневые флаги, предназначенные для
 > диагностики и обхода проблем бэкенда. Их поведение не гарантируется
-> между версиями rclone и может быть изменено или удалено в будущем[reference:2].
+> между версиями rclone и может быть изменено или удалено в будущем.
 
 ### Как включить `retry400`
 
@@ -575,9 +577,9 @@ New-StoredCredential -Target "rclone-config-pass" -Credential $cred -Persist Loc
    ```ini
    [mailru]
    type = mailru
-   user = ваш_логин@mail.ru
-   pass = <обфусцированный пароль>
-   token = <токен>
+   user = <EMAIL>@mail.ru
+   pass = <OBFUSCATED_PASSWORD>
+   token = <TOKEN>
    quirks = retry400
    ```
 
@@ -592,8 +594,7 @@ New-StoredCredential -Target "rclone-config-pass" -Credential $cred -Persist Loc
   возникала из-за символа `%` в именах файлов или папок. Просмотрите лог
   и попробуйте переименовать проблемные каталоги, убрав из них
   нестандартные символы.
-- **Разбейте задачу на части.** Слишком длинные или сложные пути (как,
-  например, `sites/energames.com/.games/.../artworks/title/src`) могут
+- **Разбейте задачу на части.** Слишком длинные или сложные пути могут
   провоцировать ошибку. Настройте в `backup.config.json` несколько
   отдельных записей для подпапок вместо одной большой папки.
 - **Попробуйте другую версию rclone.** Если ошибки появились после
