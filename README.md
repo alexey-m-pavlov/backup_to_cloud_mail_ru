@@ -46,6 +46,7 @@
 ```
 backup_to_cloud_mail_ru/
 ├── .gitignore
+├── AGENTS.md                       правила работы над проектом
 ├── Backup-ToCloudMailRu.ps1
 ├── backup.config.json              локальный, в git не попадает
 ├── backup.config.example.json      шаблон
@@ -59,6 +60,7 @@ backup_to_cloud_mail_ru/
 | Файл | Назначение |
 |---|---|
 | `Backup-ToCloudMailRu.ps1` | Основной скрипт резервного копирования |
+| `AGENTS.md` | Правила работы над проектом: Issue, ветки, коммиты |
 | `backup.config.json` | Конфигурация: пути, remote, папки, логирование |
 | `backup.config.example.json` | Шаблон конфигурации для новых машин |
 | `backup_to_cloud_mail_ru.xml` | Пример выгрузки задания Планировщика с корректным путём к `pwsh.exe` |
